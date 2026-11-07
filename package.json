@@ -1,0 +1,8 @@
+{
+  "name": "jibhr",
+  "private": true,
+  "description": "Local Supabase CLI for JibHR. The application itself is Flutter.",
+  "devDependencies": {
+    "supabase": "3.0.0"
+  }
+}
