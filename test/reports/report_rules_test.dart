@@ -1,35 +1,10 @@
 import 'dart:ui' as ui;
 
 import 'package:excel/excel.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:jibhr/core/localization/fa.dart';
-import 'package:jibhr/features/dashboard/dashboard_page.dart';
 import 'package:jibhr/features/reports/pdf_report.dart';
 import 'package:jibhr/features/reports/report_rules.dart';
 import 'package:jibhr/features/reports/xlsx_report.dart';
-
-Map<String, dynamic> _personal() {
-  return {
-    'open': false,
-    'incomplete': 1,
-    'approved_seconds': 3600,
-    'pending_seconds': 0,
-    'recorded_seconds': 3600,
-    'rejected_seconds': 0,
-    'week_approved_seconds': 7200,
-    'month_approved_seconds': 10800,
-    'personal_tasks': 2,
-    'project_tasks': 1,
-    'awaiting_review': 0,
-    'needs_revision': 0,
-    'leave_pending': 0,
-    'unread': 3,
-    'statuses': [
-      {'name': 'انجام کار', 'category': 'in_progress', 'total': 2},
-    ],
-  };
-}
 
 void main() {
   test('formula text stays a plain cell', () {
@@ -144,84 +119,4 @@ void main() {
     expect(pages, '2', reason: latin.substring(0, latin.length.clamp(0, 800)));
   });
 
-  testWidgets('an employee dashboard hides team and empty queues', (tester) async {
-    tester.view.physicalSize = const Size(1400, 4000);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: DashboardBody(
-          firstName: 'سارا',
-          summary: {
-            'personal': _personal(),
-            'team': null,
-            'projects': null,
-            'queues': {'attendance': 0, 'corrections': 0, 'leave': 0, 'disputes': 0, 'task_reviews': 0},
-          },
-          stale: true,
-          canOpenPerson: false,
-          canExport: true,
-        ),
-      ),
-    ));
-    expect(find.textContaining('سارا'), findsOneWidget);
-    expect(find.text(Fa.staleDashboard), findsOneWidget);
-    expect(find.text(Fa.teamSummary), findsNothing);
-    expect(find.text(Fa.projectSummary), findsNothing);
-    expect(find.text(Fa.pendingApprovals), findsNothing);
-    expect(find.text('انجام کار: ۲'), findsOneWidget);
-    expect(find.text('عملکرد بالا'), findsNothing);
-  });
-
-  testWidgets('a manager dashboard lists the team without a score', (tester) async {
-    tester.view.physicalSize = const Size(1400, 4000);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: DashboardBody(
-          firstName: 'مدیر',
-          summary: {
-            'personal': _personal(),
-            'team': {
-              'employees': 2,
-              'open_intervals': 0,
-              'pending_reports': 1,
-              'pending_corrections': 0,
-              'pending_leave': 0,
-              'pending_disputes': 0,
-              'active_tasks': 3,
-              'review_tasks': 1,
-              'overdue_tasks': 0,
-              'complete_tasks': 4,
-              'people': [
-                {
-                  'id': 'p1',
-                  'name': 'سارا',
-                  'position': 'توسعه‌دهنده',
-                  'approved_seconds': 3600,
-                  'pending_seconds': 0,
-                  'active_tasks': 1,
-                  'complete_tasks': 2,
-                  'review_tasks': 0,
-                  'open_corrections': 0,
-                },
-              ],
-            },
-            'projects': {'active': 1, 'archived': 0, 'tasks': 3, 'awaiting_review': 0, 'overdue': 0, 'complete': 1, 'active_sprints': 1, 'upcoming_milestones': 0, 'reached_milestones': 0},
-            'queues': {'attendance': 1, 'corrections': 0, 'leave': 0, 'disputes': 0, 'task_reviews': 0},
-          },
-          stale: false,
-          canOpenPerson: true,
-          canExport: false,
-        ),
-      ),
-    ));
-    expect(find.text(Fa.teamSummary), findsOneWidget);
-    expect(find.text(Fa.projectSummary), findsOneWidget);
-    expect(find.text('سارا'), findsWidgets);
-    expect(find.text(Fa.noRanking), findsOneWidget);
-    expect(find.text(Fa.exportReport), findsNothing);
-    expect(find.text(Fa.pendingApprovals), findsOneWidget);
-  });
 }

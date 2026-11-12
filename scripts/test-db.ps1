@@ -33,4 +33,12 @@ Write-Host "critical tests"
 docker exec $name psql -U postgres -d jibhr -v ON_ERROR_STOP=1 -f /work/tests/critical.sql
 if ($LASTEXITCODE -ne 0) { throw "critical tests failed" }
 
+Write-Host "group page tests"
+docker exec $name psql -U postgres -d jibhr -v ON_ERROR_STOP=1 -f /work/tests/attendance_group_page.sql
+if ($LASTEXITCODE -ne 0) { throw "group page tests failed" }
+
+Write-Host "dashboard split tests"
+docker exec $name psql -U postgres -d jibhr -v ON_ERROR_STOP=1 -f /work/tests/dashboard_split.sql
+if ($LASTEXITCODE -ne 0) { throw "dashboard split tests failed" }
+
 Write-Host "DB TESTS PASSED"

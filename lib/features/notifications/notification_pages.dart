@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/calendar/tehran_time.dart';
+import '../../core/design_system/app_icons.dart';
 import '../../core/design_system/glass_card.dart';
 import '../../core/design_system/state_views.dart';
 import '../../core/localization/fa.dart';
@@ -13,19 +14,28 @@ import 'notification_rules.dart';
 const _categories = ['attendance', 'leave', 'absence', 'task', 'project', 'sprint', 'milestone'];
 
 class NotificationBell extends ConsumerWidget {
-  const NotificationBell({super.key});
+  const NotificationBell({super.key, this.materialTooltip = true});
+
+  /// False when a surrounding side tooltip shows the name instead. The
+  /// accessible label is kept either way.
+  final bool materialTooltip;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(notificationRealtimeProvider);
     final count = ref.watch(unreadCountProvider).asData?.value ?? 0;
+    final label = count > 0 ? '${Fa.inbox}، ${persianDigits(count)} ${Fa.unreadSuffix}' : Fa.inbox;
     return IconButton(
-      tooltip: Fa.inbox,
+      key: const Key('notification-bell'),
+      tooltip: materialTooltip ? label : null,
       onPressed: () => context.go('/notifications'),
       icon: Badge(
         isLabelVisible: count > 0,
         label: Text(persianDigits(count)),
-        child: const Icon(Icons.notifications_outlined),
+        child: AppIconView(
+          count > 0 ? AppIcons.notificationsUnread : AppIcons.notifications,
+          semanticLabel: materialTooltip ? null : label,
+        ),
       ),
     );
   }
@@ -289,12 +299,12 @@ class NotificationCard extends StatelessWidget {
 }
 
 IconData _icon(String category) => switch (category) {
-      'attendance' => Icons.schedule,
-      'leave' => Icons.event_available_outlined,
-      'absence' => Icons.event_busy_outlined,
-      'task' => Icons.task_alt,
-      'project' => Icons.account_tree_outlined,
-      'sprint' => Icons.timelapse,
-      'milestone' => Icons.flag_outlined,
-      _ => Icons.notifications_outlined,
+      'attendance' => AppIcons.attendance.linear,
+      'leave' => AppIcons.leaveApproved.linear,
+      'absence' => AppIcons.absence.linear,
+      'task' => AppIcons.work.linear,
+      'project' => AppIcons.projects.linear,
+      'sprint' => AppIcons.sprint.linear,
+      'milestone' => AppIcons.milestone.linear,
+      _ => AppIcons.notifications.linear,
     };

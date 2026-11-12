@@ -23,30 +23,92 @@ class AttendanceGroupView extends StatelessWidget {
     required this.today,
     required this.group,
     required this.onPerson,
+    this.onPage,
   });
 
   final AttendanceRange range;
   final Jalali today;
   final GroupAttendance group;
-  final ValueChanged<String> onPerson;
+  final ValueChanged<PersonAttendance> onPerson;
+  final ValueChanged<int>? onPage;
 
   @override
   Widget build(BuildContext context) {
-    if (group.people.isEmpty) return const AttendancePanel(child: Text(Fa.empty));
+    if (group.total == 0) {
+      return const Padding(
+        padding: EdgeInsets.all(16),
+        child: Align(
+          alignment: AlignmentDirectional.topStart,
+          child: AttendancePanel(key: Key('attendance-group-empty'), child: Text(Fa.empty)),
+        ),
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        LayoutBuilder(
-          builder: (context, constraints) => constraints.maxWidth < compactBelow
-              ? _PhoneDayList(range: range, today: today, people: group.people, onPerson: onPerson)
-              : _Matrix(range: range, today: today, people: group.people, onPerson: onPerson),
+        // Outside the scroll, so paging never needs a trip past fifty rows.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 2,
+            children: [
+              const AttendanceLegend(),
+              _Pager(group: group, onPage: onPage),
+            ],
+          ),
         ),
-        if (group.truncated) ...[
-          const SizedBox(height: 8),
-          Text(Fa.peopleTruncated, style: TextStyle(color: paletteOf(context).warning)),
-        ],
-        const SizedBox(height: 10),
-        const AttendanceLegend(),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) => constraints.maxWidth < compactBelow
+                    ? _PhoneDayList(range: range, today: today, people: group.people, onPerson: onPerson)
+                    : _Matrix(range: range, today: today, people: group.people, onPerson: onPerson),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _Pager extends StatelessWidget {
+  const _Pager({required this.group, required this.onPage});
+
+  final GroupAttendance group;
+  final ValueChanged<int>? onPage;
+
+  @override
+  Widget build(BuildContext context) {
+    final first = group.offset + 1;
+    final last = group.offset + group.people.length;
+    final page = onPage;
+    return Row(
+      key: const Key('attendance-pager'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          key: const Key('pager-previous'),
+          tooltip: Fa.previousPage,
+          onPressed: group.hasPrevious && page != null ? () => page(group.pageIndex - 1) : null,
+          icon: const Icon(Icons.chevron_right),
+        ),
+        Text(
+          persianDigits('$first تا $last از ${group.total} نفر'),
+          key: const Key('attendance-pager-label'),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        IconButton(
+          key: const Key('pager-next'),
+          tooltip: Fa.nextPage,
+          onPressed: group.hasNext && page != null ? () => page(group.pageIndex + 1) : null,
+          icon: const Icon(Icons.chevron_left),
+        ),
       ],
     );
   }
@@ -58,7 +120,7 @@ class _Matrix extends StatefulWidget {
   final AttendanceRange range;
   final Jalali today;
   final List<PersonAttendance> people;
-  final ValueChanged<String> onPerson;
+  final ValueChanged<PersonAttendance> onPerson;
 
   @override
   State<_Matrix> createState() => _MatrixState();
@@ -157,7 +219,7 @@ class _NameCell extends StatelessWidget {
   const _NameCell({required this.person, required this.onPerson});
 
   final PersonAttendance person;
-  final ValueChanged<String> onPerson;
+  final ValueChanged<PersonAttendance> onPerson;
 
   @override
   Widget build(BuildContext context) {
@@ -173,7 +235,7 @@ class _NameCell extends StatelessWidget {
         child: InkWell(
           key: ValueKey('person-${person.id}'),
           borderRadius: BorderRadius.circular(12),
-          onTap: () => onPerson(person.id),
+          onTap: () => onPerson(person),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             decoration: BoxDecoration(border: Border(top: BorderSide(color: palette.hairline))),
@@ -292,7 +354,7 @@ class _PhoneDayList extends StatefulWidget {
   final AttendanceRange range;
   final Jalali today;
   final List<PersonAttendance> people;
-  final ValueChanged<String> onPerson;
+  final ValueChanged<PersonAttendance> onPerson;
 
   @override
   State<_PhoneDayList> createState() => _PhoneDayListState();
@@ -353,7 +415,7 @@ class _PersonDayCard extends StatelessWidget {
   final PersonAttendance person;
   final DayAttendance? day;
   final AppPalette palette;
-  final ValueChanged<String> onPerson;
+  final ValueChanged<PersonAttendance> onPerson;
 
   @override
   Widget build(BuildContext context) {
@@ -374,7 +436,7 @@ class _PersonDayCard extends StatelessWidget {
                 IconButton(
                   tooltip: Fa.openPersonCalendar,
                   visualDensity: VisualDensity.compact,
-                  onPressed: () => onPerson(person.id),
+                  onPressed: () => onPerson(person),
                   icon: const Icon(Icons.calendar_month_outlined, size: 20),
                 ),
               ],

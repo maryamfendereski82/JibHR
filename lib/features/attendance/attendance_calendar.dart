@@ -135,13 +135,78 @@ class AttendanceCalendarModel {
   static const emptyTotals = DurationTotals(recorded: 0, pending: 0, approved: 0, revision: 0, rejected: 0);
 }
 
+/// One server-side page. [total] counts everyone this viewer may see under the
+/// current filters, not only the people on this page.
 class GroupAttendance {
-  const GroupAttendance({required this.people, this.truncated = false});
+  const GroupAttendance({
+    required this.people,
+    required this.total,
+    this.limit = groupPageSize,
+    this.offset = 0,
+  });
 
   final List<PersonAttendance> people;
+  final int total;
+  final int limit;
+  final int offset;
 
-  /// More people exist than the screen reads at once.
-  final bool truncated;
+  bool get hasPrevious => offset > 0;
+  bool get hasNext => offset + limit < total;
+  int get pageIndex => offset ~/ limit;
+  int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
+}
+
+const groupPageSize = 50;
+
+/// Reads `attendance_group_page`. Every duration here is what the backend sent.
+GroupAttendance parseGroupPage(Map<String, dynamic> raw, List<Jalali> days) {
+  final people = <PersonAttendance>[];
+  for (final row in _maps(raw['people'])) {
+    final id = row['id']?.toString() ?? '';
+    final totals = row['totals'];
+    final approved = row['approved_by_day'];
+    people.add(PersonAttendance(
+      id: id,
+      name: '${row['first_name'] ?? ''} ${row['last_name'] ?? ''}'.trim(),
+      teamId: row['team_id']?.toString() ?? '',
+      totals: totals is Map ? DurationTotals.fromRow(Map<String, dynamic>.from(totals)) : AttendanceCalendarModel.emptyTotals,
+      days: buildDays(
+        days,
+        [for (final slice in _maps(row['slices'])) _groupSlice(slice, id)],
+        approved: approved is Map
+            ? {for (final entry in approved.entries) entry.key.toString(): (entry.value as num?)?.toInt() ?? 0}
+            : const {},
+      ),
+    ));
+  }
+  return GroupAttendance(
+    people: people,
+    total: (raw['total'] as num?)?.toInt() ?? 0,
+    limit: (raw['limit'] as num?)?.toInt() ?? groupPageSize,
+    offset: (raw['offset'] as num?)?.toInt() ?? 0,
+  );
+}
+
+List<Map<String, dynamic>> _maps(dynamic value) {
+  if (value is! List) return const [];
+  return [for (final row in value) if (row is Map) Map<String, dynamic>.from(row)];
+}
+
+DateTime? _time(dynamic value) => value == null ? null : DateTime.tryParse(value.toString());
+
+CalendarSlice _groupSlice(Map<String, dynamic> row, String profileId) {
+  return CalendarSlice(
+    intervalId: row['interval_id']?.toString() ?? '',
+    profileId: profileId,
+    tehranDate: row['tehran_date']?.toString() ?? '',
+    startedAt: _time(row['started_at']),
+    endedAt: _time(row['ended_at']),
+    intervalStatus: row['interval_status']?.toString() ?? 'closed',
+    approvalMode: row['approval_mode']?.toString() ?? 'report',
+    decision: row['decision']?.toString(),
+    startPlatform: row['start_platform']?.toString(),
+    endPlatform: row['end_platform']?.toString(),
+  );
 }
 
 class AttendanceCalendarQuery {
@@ -171,18 +236,24 @@ class AttendanceCalendarQuery {
 }
 
 class GroupAttendanceQuery {
-  const GroupAttendanceQuery({required this.range, this.teamId});
+  const GroupAttendanceQuery({required this.range, this.teamId, this.search = '', this.page = 0});
 
   final AttendanceRange range;
   final String? teamId;
+  final String search;
+  final int page;
 
   @override
   bool operator ==(Object other) {
-    return other is GroupAttendanceQuery && other.range == range && other.teamId == teamId;
+    return other is GroupAttendanceQuery &&
+        other.range == range &&
+        other.teamId == teamId &&
+        other.search == search &&
+        other.page == page;
   }
 
   @override
-  int get hashCode => Object.hash(range, teamId);
+  int get hashCode => Object.hash(range, teamId, search, page);
 }
 
 enum RangeKind { week, month, custom }

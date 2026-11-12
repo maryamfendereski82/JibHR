@@ -1,455 +1,373 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/calendar/tehran_time.dart';
-import '../../core/design_system/glass_card.dart';
 import '../../core/design_system/state_views.dart';
 import '../../core/localization/fa.dart';
-import '../../core/theme/app_theme.dart';
-import '../attendance/attendance_review.dart';
+import '../../core/theme/app_tokens.dart';
+import '../attendance/attendance_page.dart';
+import '../attendance/attendance_repository.dart';
 import '../reports/report_repository.dart';
 import '../reports/report_rules.dart';
 import '../session/workspace_session.dart';
+import '../shell/navigation.dart';
+import '../work/project_pages.dart';
+import '../work/work_repository.dart';
+import 'dashboard_providers.dart';
+import 'dashboard_rules.dart';
+import 'widgets/home_parts.dart';
+import 'widgets/home_sections.dart';
+import 'widgets/people_panel.dart';
 
-class DashboardPage extends ConsumerWidget {
+/// A provider's state as a section state. A failed refresh keeps the previous
+/// value (Riverpod does), which then shows as stale instead of an error.
+SectionData<T> _section<T>(AsyncValue<T?> value) {
+  final data = value.hasValue ? value.value : null;
+  return SectionData<T>(
+    value: data,
+    loading: value.isLoading && data == null && !value.hasError,
+    error: value.hasError && data == null ? value.error : null,
+    stale: value.hasError && data != null,
+  );
+}
+
+/// The four dashboard sources. Refreshed together, failing separately.
+void invalidateDashboardSections(WidgetRef ref) {
+  ref.invalidate(dashboardPersonalProvider);
+  ref.invalidate(dashboardQueuesProvider);
+  ref.invalidate(dashboardTeamProvider);
+  ref.invalidate(dashboardProjectsProvider);
+}
+
+class DashboardPage extends ConsumerStatefulWidget {
   const DashboardPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DashboardPage> createState() => _DashboardPageState();
+}
+
+class _DashboardPageState extends ConsumerState<DashboardPage> {
+  bool _punching = false;
+
+  Future<void> _punch(bool isOpen) async {
+    if (_punching) return;
+    setState(() => _punching = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await punchAttendance(ref, isOpen: isOpen);
+      // Clocking changes personal figures and, for approvers, the queues.
+      ref.invalidate(dashboardPersonalProvider);
+      ref.invalidate(dashboardQueuesProvider);
+      ref.invalidate(dashboardTeamProvider);
+      messenger.showSnackBar(SnackBar(content: Text(isOpen ? Fa.homeClockedOutDone : Fa.homeClockedInDone)));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text(Fa.network)));
+    } finally {
+      if (mounted) setState(() => _punching = false);
+    }
+  }
+
+  void _refresh() {
+    invalidateDashboardSections(ref);
+    ref.invalidate(attendanceBoardProvider);
+    ref.invalidate(homeTasksProvider);
+    ref.invalidate(projectListProvider);
+    ref.invalidate(homePeopleProvider);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final session = ref.watch(workspaceSessionProvider);
-    return session.when(
-      loading: () => const LoadingView(),
-      error: (error, _) => ErrorView(message: Fa.network, onRetry: () => ref.invalidate(workspaceSessionProvider)),
-      data: (value) {
-        if (value == null) return const LoadingView();
-        final summary = ref.watch(dashboardSummaryProvider);
-        final cached = ref.watch(dashboardCacheProvider);
-        final live = summary.hasError ? null : summary.value;
-        final data = live ?? cached;
-        final stale = summary.hasError && data != null;
-        if (data == null) {
-          return summary.when(
-            loading: () => const LoadingView(),
-            error: (error, _) => ErrorView(
-              message: reportErrorText(error),
-              onRetry: () => ref.invalidate(dashboardSummaryProvider),
-            ),
-            data: (_) => const LoadingView(),
-          );
-        }
-        return RefreshIndicator(
-          onRefresh: () async => ref.invalidate(dashboardSummaryProvider),
-          child: DashboardBody(
-            firstName: value.firstName,
-            teamName: value.teamName,
-            summary: data,
-            stale: stale,
-            canOpenPerson: canOpenAttendance(value.permissions),
-            canExport: canExportReports(value.permissions),
-            pagedPeople: true,
-            onRefresh: () => ref.invalidate(dashboardSummaryProvider),
-          ),
-        );
+    final value = session.asData?.value;
+    if (value == null) {
+      if (session.hasError) {
+        return ErrorView(message: Fa.network, onRetry: () => ref.invalidate(workspaceSessionProvider));
+      }
+      return const HomeSkeleton();
+    }
+
+    final personal = _section<Map<String, dynamic>>(ref.watch(dashboardPersonalProvider));
+    final queues = _section<Map<String, dynamic>>(ref.watch(dashboardQueuesProvider));
+    final teamState = ref.watch(dashboardTeamProvider);
+    final projectsState = ref.watch(dashboardProjectsProvider);
+
+    // A section is shown when its function returned data. While it loads or
+    // after it failed, it is shown only to people whose permissions mean it
+    // could exist, so others never see a skeleton or error for it.
+    final teamLoaded = teamState.hasValue;
+    final team = teamLoaded
+        ? (teamState.value == null ? null : _section<Map<String, dynamic>>(teamState))
+        : (mayHaveTeamSection(value) ? _section<Map<String, dynamic>>(teamState) : null);
+    final projectsLoaded = projectsState.hasValue;
+    final projectsSummary = projectsLoaded
+        ? (projectsState.value == null ? null : _section<Map<String, dynamic>>(projectsState))
+        : (mayHaveProjectsSection(value) ? _section<Map<String, dynamic>>(projectsState) : null);
+
+    final showAttendance = value.can('attendance.view.self');
+    final attendance = showAttendance ? _section<AttendanceBoard>(ref.watch(attendanceBoardProvider)) : const SectionData<AttendanceBoard>();
+    final showAgenda = canSeeWork(value);
+    final tasks = showAgenda ? _section<List<TaskRow>>(ref.watch(homeTasksProvider)) : const SectionData<List<TaskRow>>();
+    final projects = projectsSummary != null && projectsSummary.hasValue
+        ? _section<List<ProjectRow>>(ref.watch(projectListProvider((archived: false, page: 0))).whenData((v) => v.projects))
+        : const SectionData<List<ProjectRow>>(loading: true);
+
+    return HomeView(
+      session: value,
+      now: DateTime.now().toUtc(),
+      personal: personal,
+      queues: queues,
+      team: team,
+      projectsSummary: projectsSummary,
+      attendance: showAttendance ? attendance : null,
+      tasks: showAgenda ? tasks : null,
+      projects: projects,
+      punching: _punching,
+      onPunch: _punch,
+      onNavigate: (path) => context.go(path),
+      onRefresh: _refresh,
+      onRetryPersonal: () => ref.invalidate(dashboardPersonalProvider),
+      onRetryQueues: () {
+        ref.invalidate(dashboardQueuesProvider);
+        ref.invalidate(dashboardPersonalProvider);
       },
+      onRetryTeam: () => ref.invalidate(dashboardTeamProvider),
+      onRetryProjectsSummary: () => ref.invalidate(dashboardProjectsProvider),
+      onRetryAttendance: () => ref.invalidate(attendanceBoardProvider),
+      onRetryTasks: () => ref.invalidate(homeTasksProvider),
+      onRetryProjects: () => ref.invalidate(projectListProvider),
+      people: PeoplePanel(
+        canOpenPerson: canOpenAttendance(value.permissions),
+        onOpenPerson: (id) => context.go('/reports/attendance?profile=$id'),
+      ),
     );
   }
 }
 
-class DashboardBody extends StatefulWidget {
-  const DashboardBody({
+/// The shape of Home while the session (and so the permissions) loads, so
+/// the page does not start as a lone spinner and then jump.
+class HomeSkeleton extends StatelessWidget {
+  const HomeSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final width = constraints.maxWidth;
+      final gutter = AppSpace.gutter(width);
+      final content = math.min(width - gutter * 2, 1320.0);
+      final twoColumn = content >= 880;
+      Widget card(double height) => SkeletonBlock(height: height, radius: AppRadius.panel);
+      return Semantics(
+        label: Fa.loading,
+        child: ListView(
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.symmetric(horizontal: gutter + (width - gutter * 2 - content) / 2, vertical: AppSpace.xxl),
+          children: [
+            // ListView stretches its children; Align keeps the title widths.
+            const Align(alignment: AlignmentDirectional.centerStart, child: SkeletonBlock(height: 34, width: 260)),
+            const SizedBox(height: AppSpace.s),
+            const Align(alignment: AlignmentDirectional.centerStart, child: SkeletonBlock(height: 18, width: 200)),
+            const SizedBox(height: AppSpace.xl),
+            if (twoColumn)
+              Row(children: [Expanded(flex: 5, child: card(260)), const SizedBox(width: AppSpace.l), Expanded(flex: 7, child: card(260))])
+            else ...[card(240), const SizedBox(height: AppSpace.l), card(200)],
+            const SizedBox(height: AppSpace.l),
+            card(220),
+          ],
+        ),
+      );
+    });
+  }
+}
+
+/// Home layout, provider-free. Every section gets its own [SectionData];
+/// sections fed by `dashboard_summary` share one, so they fail together but
+/// each shows its own error and retry.
+class HomeView extends StatelessWidget {
+  const HomeView({
     super.key,
-    required this.firstName,
-    required this.summary,
-    required this.stale,
-    required this.canOpenPerson,
-    required     this.canExport,
-    this.pagedPeople = false,
-    this.teamName,
-    this.onRefresh,
+    required this.session,
+    required this.now,
+    required this.personal,
+    required this.queues,
+    required this.team,
+    required this.projectsSummary,
+    required this.attendance,
+    required this.tasks,
+    required this.projects,
+    required this.punching,
+    required this.onPunch,
+    required this.onNavigate,
+    required this.onRefresh,
+    required this.onRetryPersonal,
+    required this.onRetryQueues,
+    required this.onRetryTeam,
+    required this.onRetryProjectsSummary,
+    required this.onRetryAttendance,
+    required this.onRetryTasks,
+    required this.onRetryProjects,
+    this.people,
   });
 
-  final String firstName;
-  final String? teamName;
-  final Map<String, dynamic> summary;
-  final bool stale;
-  final bool canOpenPerson;
-  final bool canExport;
-  final bool pagedPeople;
-  final VoidCallback? onRefresh;
+  final WorkspaceSession session;
+  final DateTime now;
 
-  @override
-  State<DashboardBody> createState() => _DashboardBodyState();
-}
+  /// `dashboard_personal`.
+  final SectionData<Map<String, dynamic>> personal;
 
-class _DashboardBodyState extends State<DashboardBody> {
-  String _sortKey = 'name';
-  bool _ascending = true;
+  /// `dashboard_queues`.
+  final SectionData<Map<String, dynamic>> queues;
 
-  @override
-  Widget build(BuildContext context) {
-    final palette = paletteOf(context);
-    final personal = asMap(widget.summary['personal']) ?? const {};
-    final team = asMap(widget.summary['team']);
-    final projects = asMap(widget.summary['projects']);
-    final queues = asMap(widget.summary['queues']);
-    final people = sortPeople(asMaps(team?['people']), _sortKey, _ascending);
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Text('${Fa.greeting}، ${widget.firstName}', style: Theme.of(context).textTheme.headlineMedium),
-        const SizedBox(height: 4),
-        Text(TehranTime.formatDate(DateTime.now().toUtc()), style: TextStyle(color: palette.muted)),
-        if (widget.teamName != null) Text(widget.teamName!, style: TextStyle(color: palette.muted)),
-        if (widget.stale) ...[
-          const SizedBox(height: 12),
-          Text(Fa.staleDashboard, style: TextStyle(color: palette.jade)),
-        ],
-        const SizedBox(height: 16),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _link(context, Fa.attendanceReport, '/reports/attendance'),
-            _link(context, Fa.workReport, '/reports/work'),
-            _link(context, Fa.leaveReport, '/reports/leave'),
-            if (widget.canExport) _link(context, Fa.exportReport, '/reports/export'),
-            TextButton(onPressed: widget.onRefresh, child: const Text(Fa.refresh)),
-          ],
+  /// `dashboard_team`; null when the section is not shown at all.
+  final SectionData<Map<String, dynamic>>? team;
+
+  /// `dashboard_projects`; null when the section is not shown at all.
+  final SectionData<Map<String, dynamic>>? projectsSummary;
+
+  /// Null when the person has no attendance of their own to show.
+  final SectionData<AttendanceBoard>? attendance;
+
+  /// Null when the person has no access to work.
+  final SectionData<List<TaskRow>>? tasks;
+  final SectionData<List<ProjectRow>> projects;
+  final bool punching;
+  final ValueChanged<bool> onPunch;
+  final ValueChanged<String> onNavigate;
+  final VoidCallback onRefresh;
+  final VoidCallback onRetryPersonal;
+  final VoidCallback onRetryQueues;
+  final VoidCallback onRetryTeam;
+  final VoidCallback onRetryProjectsSummary;
+  final VoidCallback onRetryAttendance;
+  final VoidCallback onRetryTasks;
+  final VoidCallback onRetryProjects;
+
+  /// The people table; it reads its own provider, so tests may leave it out.
+  final Widget? people;
+
+  /// Action items come from two sources: queues (what others wait on) and
+  /// personal (the person's own follow-ups). Either can fail alone; the items
+  /// of the other still show, with an error in place for the missing part.
+  ({SectionData<List<HomeAction>> data, bool partial}) _actions() {
+    final p = personal.value;
+    final q = queues.value;
+    if (p == null && q == null) {
+      return (
+        data: SectionData<List<HomeAction>>(
+          loading: personal.loading || queues.loading,
+          error: (personal.error != null && queues.error != null) ? (queues.error ?? personal.error) : null,
         ),
-        const SizedBox(height: 16),
-        _section(context, Fa.personalSummary, [
-          _metric(Fa.today, personal['open'] == true ? Fa.clockedIn : Fa.clockedOut),
-          _metric(Fa.incomplete, persianDigits(asInt(personal['incomplete']))),
-          _metric(Fa.approved, formatHours(asInt(personal['approved_seconds']))),
-          _metric(Fa.pending, formatHours(asInt(personal['pending_seconds']))),
-          _metric(Fa.recorded, formatHours(asInt(personal['recorded_seconds']))),
-          _metric(Fa.weekApproved, formatHours(asInt(personal['week_approved_seconds']))),
-          _metric(Fa.monthApproved, formatHours(asInt(personal['month_approved_seconds']))),
-          _metric(Fa.personalTaskCount, persianDigits(asInt(personal['personal_tasks']))),
-          _metric(Fa.projectTasks, persianDigits(asInt(personal['project_tasks']))),
-          _metric(Fa.awaitingReview, persianDigits(asInt(personal['awaiting_review']))),
-          _metric(Fa.changesRequested, persianDigits(asInt(personal['needs_revision']))),
-          _metric(Fa.leavePending, persianDigits(asInt(personal['leave_pending']))),
-          _metric(Fa.notifications, persianDigits(asInt(personal['unread']))),
-        ]),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          children: [
-            _link(context, Fa.myTasks, '/work/mine'),
-            _link(context, Fa.attendance, '/attendance'),
-            _link(context, Fa.inbox, '/notifications'),
-          ],
-        ),
-        const SizedBox(height: 12),
-        _statusList(context, asMaps(personal['statuses'])),
-        if (showTeam(team)) ...[
-          const SizedBox(height: 16),
-          _section(context, Fa.teamSummary, [
-            _metric(Fa.activeEmployees, persianDigits(asInt(team!['employees']))),
-            _metric(Fa.openIntervals, persianDigits(asInt(team['open_intervals']))),
-            _metric(Fa.pendingReports, persianDigits(asInt(team['pending_reports']))),
-            _metric(Fa.pendingCorrections, persianDigits(asInt(team['pending_corrections']))),
-            _metric(Fa.leavePending, persianDigits(asInt(team['pending_leave']))),
-            _metric(Fa.pendingDisputes, persianDigits(asInt(team['pending_disputes']))),
-            _metric(Fa.activeTasks, persianDigits(asInt(team['active_tasks']))),
-            _metric(Fa.reviewTasks, persianDigits(asInt(team['review_tasks']))),
-            _metric(Fa.overdueTasks, persianDigits(asInt(team['overdue_tasks']))),
-            _metric(Fa.completeTasks, persianDigits(asInt(team['complete_tasks']))),
-          ]),
-          const SizedBox(height: 8),
-          Text(Fa.noRanking, style: TextStyle(color: palette.muted)),
-          const SizedBox(height: 8),
-          if (people.isNotEmpty)
-            _peopleTable(context, people)
-          else if (widget.pagedPeople)
-            DashboardPeopleTable(canOpenPerson: widget.canOpenPerson),
-        ],
-        if (showProjects(projects)) ...[
-          const SizedBox(height: 16),
-          _section(context, Fa.projectSummary, [
-            _metric(Fa.activeProjects, persianDigits(asInt(projects!['active']))),
-            _metric(Fa.archivedProjects, persianDigits(asInt(projects['archived']))),
-            _metric(Fa.activeTasks, persianDigits(asInt(projects['tasks']))),
-            _metric(Fa.awaitingReview, persianDigits(asInt(projects['awaiting_review']))),
-            _metric(Fa.overdueTasks, persianDigits(asInt(projects['overdue']))),
-            _metric(Fa.completeTasks, persianDigits(asInt(projects['complete']))),
-            _metric(Fa.activeSprints, persianDigits(asInt(projects['active_sprints']))),
-            _metric(Fa.upcomingMilestones, persianDigits(asInt(projects['upcoming_milestones']))),
-            _metric(Fa.reachedMilestones, persianDigits(asInt(projects['reached_milestones']))),
-          ]),
-        ],
-        if (showQueues(queues)) ...[
-          const SizedBox(height: 16),
-          Text(Fa.pendingApprovals, style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (asInt(queues!['attendance']) > 0)
-                _link(context, '${Fa.approvalQueue} ${persianDigits(asInt(queues['attendance']))}', '/attendance/approvals'),
-              if (asInt(queues['corrections']) > 0)
-                _link(context, '${Fa.correctionQueue} ${persianDigits(asInt(queues['corrections']))}', '/attendance/corrections'),
-              if (asInt(queues['leave']) > 0)
-                _link(context, '${Fa.leavePending} ${persianDigits(asInt(queues['leave']))}', '/leave/queue'),
-              if (asInt(queues['disputes']) > 0)
-                _link(context, '${Fa.pendingDisputes} ${persianDigits(asInt(queues['disputes']))}', '/leave/absence'),
-              if (asInt(queues['task_reviews']) > 0)
-                _link(context, '${Fa.taskReviews} ${persianDigits(asInt(queues['task_reviews']))}', '/work'),
-            ],
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _peopleTable(BuildContext context, List<Map<String, dynamic>> people) {
-    if (people.isEmpty) return const Text(Fa.empty);
-    final table = DataTable(
-      showCheckboxColumn: false,
-      sortColumnIndex: _columnIndex(_sortKey),
-      sortAscending: _ascending,
-      columns: [
-        _column(Fa.employee, 'name'),
-        _column(Fa.position, 'position'),
-        _column(Fa.approvedHours, 'approved_seconds'),
-        _column(Fa.pendingHours, 'pending_seconds'),
-        _column(Fa.activeTasks, 'active_tasks'),
-        _column(Fa.completeTasks, 'complete_tasks'),
-        _column(Fa.reviewTasks, 'review_tasks'),
-        _column(Fa.openCorrections, 'open_corrections'),
-      ],
-      rows: [
-        for (final person in people)
-          DataRow(
-            onSelectChanged: widget.canOpenPerson
-                ? (_) => context.push('/reports/attendance?profile=${person['id']}')
-                : null,
-            cells: [
-              DataCell(Text(person['name']?.toString() ?? '')),
-              DataCell(Text(person['position']?.toString() ?? '')),
-              DataCell(Text(formatHours(asInt(person['approved_seconds'])))),
-              DataCell(Text(formatHours(asInt(person['pending_seconds'])))),
-              DataCell(Text(persianDigits(asInt(person['active_tasks'])))),
-              DataCell(Text(persianDigits(asInt(person['complete_tasks'])))),
-              DataCell(Text(persianDigits(asInt(person['review_tasks'])))),
-              DataCell(Text(persianDigits(asInt(person['open_corrections'])))),
-            ],
-          ),
-      ],
-    );
-    return GlassCard(
-      padding: const EdgeInsets.all(8),
-      child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: table),
-    );
-  }
-
-  DataColumn _column(String label, String key) {
-    return DataColumn(
-      label: Text(label),
-      onSort: (_, ascending) => setState(() {
-        _sortKey = key;
-        _ascending = ascending;
-      }),
-    );
-  }
-}
-
-class DashboardPeopleTable extends ConsumerStatefulWidget {
-  const DashboardPeopleTable({super.key, required this.canOpenPerson});
-
-  final bool canOpenPerson;
-
-  @override
-  ConsumerState<DashboardPeopleTable> createState() => _DashboardPeopleTableState();
-}
-
-class _DashboardPeopleTableState extends ConsumerState<DashboardPeopleTable> {
-  final _search = TextEditingController();
-  String? _team;
-  String _sort = 'name';
-  bool _ascending = true;
-  int _offset = 0;
-  int _request = 0;
-
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final repository = ref.watch(reportRepositoryProvider);
-    final filters = ref.watch(reportFiltersProvider);
-    if (repository == null) return const SizedBox.shrink();
-    return FutureBuilder<Map<String, dynamic>>(
-      key: ValueKey('$_request$_sort$_ascending$_offset$_team${_search.text}'),
-      future: repository.people(
-        search: _search.text.trim(),
-        teamId: _team,
-        sort: _sort,
-        descending: !_ascending,
-        offset: _offset,
+        partial: false,
+      );
+    }
+    final partial = (q == null && !queues.loading) || (p == null && !personal.loading);
+    return (
+      data: SectionData<List<HomeAction>>(
+        value: homeActions({'queues': q ?? const {}, 'personal': p ?? const {}}),
+        stale: personal.stale || queues.stale,
       ),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) return Text(reportErrorText(snapshot.error!));
-        if (!snapshot.hasData) return const LinearProgressIndicator();
-        final rows = asMaps(snapshot.data!['rows']);
-        final total = asInt(snapshot.data!['total_rows'] ?? snapshot.data!['total']);
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _search,
-              decoration: const InputDecoration(labelText: Fa.searchPeople),
-              onSubmitted: (_) => setState(() {
-                _offset = 0;
-                _request++;
-              }),
-            ),
-            filters.maybeWhen(
-              data: (options) => DropdownButton<String?>(
-                value: _team,
-                items: [
-                  const DropdownMenuItem(value: null, child: Text(Fa.allTeams)),
-                  for (final team in asMaps(options['teams']))
-                    DropdownMenuItem(value: team['id']?.toString(), child: Text(team['name']?.toString() ?? '')),
-                ],
-                onChanged: (value) => setState(() {
-                  _team = value;
-                  _offset = 0;
-                  _request++;
-                }),
-              ),
-              orElse: () => const SizedBox.shrink(),
-            ),
-            if (rows.isEmpty) const Text(Fa.empty),
-            if (rows.isNotEmpty)
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: DataTable(
-                  showCheckboxColumn: false,
-                  sortColumnIndex: _columnIndex(_sort),
-                  sortAscending: _ascending,
-                  columns: [
-                    _serverColumn(Fa.employee, 'name'),
-                    _serverColumn(Fa.position, 'position'),
-                    _serverColumn(Fa.approvedHours, 'approved_seconds'),
-                    _serverColumn(Fa.pendingHours, 'pending_seconds'),
-                    _serverColumn(Fa.activeTasks, 'active_tasks'),
-                    _serverColumn(Fa.completeTasks, 'complete_tasks'),
-                    _serverColumn(Fa.reviewTasks, 'review_tasks'),
-                    _serverColumn(Fa.openCorrections, 'open_corrections'),
-                  ],
-                  rows: [
-                    for (final person in rows)
-                      DataRow(
-                        onSelectChanged: widget.canOpenPerson
-                            ? (_) => context.push('/reports/attendance?profile=${person['id']}')
-                            : null,
-                        cells: [
-                          DataCell(Text(person['name']?.toString() ?? '')),
-                          DataCell(Text(person['position']?.toString() ?? '')),
-                          DataCell(Text(formatHours(asInt(person['approved_seconds'])))),
-                          DataCell(Text(formatHours(asInt(person['pending_seconds'])))),
-                          DataCell(Text(persianDigits(asInt(person['active_tasks'])))),
-                          DataCell(Text(persianDigits(asInt(person['complete_tasks'])))),
-                          DataCell(Text(persianDigits(asInt(person['review_tasks'])))),
-                          DataCell(Text(persianDigits(asInt(person['open_corrections'])))),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-            Row(
-              children: [
-                TextButton(
-                  onPressed: _offset < 30 ? null : () => setState(() => _offset -= 30),
-                  child: const Text(Fa.previousPage),
-                ),
-                Text(persianDigits(total)),
-                TextButton(
-                  onPressed: _offset + 30 >= total ? null : () => setState(() => _offset += 30),
-                  child: const Text(Fa.nextPage),
-                ),
-              ],
-            ),
+      partial: partial,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final gutter = AppSpace.gutter(width);
+        final content = math.min(width - gutter * 2, 1320.0);
+        final twoColumn = content >= 880;
+        final compact = content < 600;
+        const gap = AppSpace.l;
+
+        final actions = _actions();
+
+        Widget pair(Widget start, Widget end, {int startFlex = 5, int endFlex = 7}) {
+          if (!twoColumn) return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [start, const SizedBox(height: gap), end]);
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: startFlex, child: start),
+              const SizedBox(width: gap),
+              Expanded(flex: endFlex, child: end),
+            ],
+          );
+        }
+
+        final hero = HomeHero(
+          greeting: greetingFor(now),
+          name: session.firstName,
+          dateLine: TehranTime.formatDate(now),
+          team: session.teamName,
+          actions: quickActions(session),
+          onNavigate: onNavigate,
+          onRefresh: onRefresh,
+          compact: compact,
+        );
+        final attendancePanel = attendance == null
+            ? null
+            : AttendancePanel(
+                data: attendance!,
+                canClock: session.can('attendance.clock'),
+                busy: punching,
+                onPunch: onPunch,
+                onRetry: onRetryAttendance,
+                onOpen: () => onNavigate('/attendance'),
+              );
+        final actionQueue = ActionQueue(data: actions.data, partialError: actions.partial, onNavigate: onNavigate, onRetry: onRetryQueues);
+        final agenda = tasks == null
+            ? null
+            : AgendaPanel(
+                data: tasks!,
+                now: now,
+                onOpenTask: (id) => onNavigate('/work/t/$id'),
+                onSeeAll: () => onNavigate('/work/mine'),
+                onRetry: onRetryTasks,
+                onCreate: session.can('tasks.create.personal') ? () => onNavigate('/work/personal') : null,
+              );
+        final mine = MineCluster(
+          data: personal,
+          onRetry: onRetryPersonal,
+          columns: twoColumn ? 2 : (content >= 520 ? 4 : 2),
+        );
+
+        final sections = <Widget>[
+          hero,
+          if (attendancePanel != null) pair(attendancePanel, actionQueue) else actionQueue,
+          if (agenda != null) pair(agenda, mine, startFlex: 7, endFlex: 5) else mine,
+          if (team != null) ...[
+            TeamOverview(data: team!, onRetry: onRetryTeam, onNavigate: onNavigate, wide: content >= 760),
+            if (team!.hasValue) ?people,
           ],
+          if (projectsSummary != null)
+            ProjectsOverview(
+              summary: projectsSummary!,
+              projects: projects,
+              onRetrySummary: onRetryProjectsSummary,
+              onRetryProjects: onRetryProjects,
+              onOpenProject: (id) => onNavigate('/work/p/$id'),
+              onSeeAll: () => onNavigate('/work'),
+              columns: content >= 760 ? 4 : 2,
+            ),
+        ];
+
+        return RefreshIndicator(
+          onRefresh: () async => onRefresh(),
+          child: ListView(
+            key: const Key('home'),
+            padding: EdgeInsets.symmetric(horizontal: gutter + (width - gutter * 2 - content) / 2, vertical: compact ? AppSpace.l : AppSpace.xxl),
+            children: [
+              for (var i = 0; i < sections.length; i++) ...[
+                if (i > 0) SizedBox(height: i == 1 ? AppSpace.xl : gap),
+                Reveal(order: i, child: sections[i]),
+              ],
+            ],
+          ),
         );
       },
     );
   }
-
-  DataColumn _serverColumn(String label, String key) {
-    return DataColumn(
-      label: Text(label),
-      onSort: (_, ascending) => setState(() {
-        _sort = key;
-        _ascending = ascending;
-        _offset = 0;
-        _request++;
-      }),
-    );
-  }
-}
-
-int? _columnIndex(String key) {
-  const keys = [
-    'name',
-    'position',
-    'approved_seconds',
-    'pending_seconds',
-    'active_tasks',
-    'complete_tasks',
-    'review_tasks',
-    'open_corrections',
-  ];
-  final index = keys.indexOf(key);
-  return index < 0 ? null : index;
-}
-
-Widget _section(BuildContext context, String title, List<Widget> metrics) {
-  return GlassCard(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 12),
-        Wrap(spacing: 16, runSpacing: 12, children: metrics),
-      ],
-    ),
-  );
-}
-
-Widget _metric(String label, String value) {
-  return SizedBox(
-    width: 160,
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label),
-        Text(value),
-      ],
-    ),
-  );
-}
-
-Widget _statusList(BuildContext context, List<Map<String, dynamic>> statuses) {
-  if (statuses.isEmpty) return const SizedBox.shrink();
-  return GlassCard(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final status in statuses)
-          Text('${status['name']}: ${persianDigits(asInt(status['total']))}'),
-      ],
-    ),
-  );
-}
-
-Widget _link(BuildContext context, String label, String path) {
-  return TextButton(onPressed: () => context.push(path), child: Text(label));
 }

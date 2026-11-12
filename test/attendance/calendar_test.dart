@@ -296,12 +296,108 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1440, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     String? opened;
-    await tester.pumpWidget(_groupHarness(onPerson: (id) => opened = id));
+    await tester.pumpWidget(_groupHarness(onPerson: (person) => opened = person.id));
     await tester.tap(find.byKey(const ValueKey('person-2')));
     expect(opened, '2');
   });
-}
 
+  test('a group page keeps backend figures, every interval and the page bounds', () {
+    final range = AttendanceRange.week(Jalali(1405, 8, 10));
+    final date = TehranTime.jalaliDayIso(1405, 8, 10);
+    final next = TehranTime.jalaliDayIso(1405, 8, 11);
+    final group = parseGroupPage({
+      'total': 120,
+      'limit': 50,
+      'offset': 50,
+      'people': [
+        {
+          'id': 'p1',
+          'team_id': 't1',
+          'first_name': 'آرش',
+          'last_name': 'تست',
+          'totals': {'recorded_seconds': 9000, 'pending_seconds': 1, 'approved_seconds': 7777, 'revision_seconds': 2, 'rejected_seconds': 3},
+          'approved_by_day': {date: 4242},
+          'slices': [
+            {'interval_id': 'n', 'tehran_date': date, 'started_at': '2026-11-01T19:00:00+00:00', 'ended_at': '2026-11-01T20:30:00+00:00', 'approval_mode': 'report', 'interval_status': 'closed', 'decision': 'approved'},
+            {'interval_id': 'n', 'tehran_date': next, 'started_at': '2026-11-01T20:30:00+00:00', 'ended_at': '2026-11-01T21:00:00+00:00', 'approval_mode': 'report', 'interval_status': 'closed', 'decision': 'pending'},
+            {'interval_id': 'o', 'tehran_date': date, 'started_at': '2026-11-01T05:00:00+00:00', 'ended_at': null, 'approval_mode': 'report', 'interval_status': 'incomplete', 'decision': null},
+          ],
+        },
+      ],
+    }, range.days);
+    expect(group.total, 120);
+    expect(group.pageIndex, 1);
+    expect(group.pageCount, 3);
+    expect(group.hasPrevious, isTrue);
+    expect(group.hasNext, isTrue);
+    final person = group.people.single;
+    expect(person.name, 'آرش تست');
+    // These are the sent figures, which no sum of the slices above would give.
+    expect(person.totals.approved, 7777);
+    expect(person.dayOn(date)!.approvedSeconds, 4242);
+    expect(person.dayOn(date)!.slices.map((slice) => slice.intervalId), ['o', 'n']);
+    expect(person.dayOn(date)!.tone, DayTone.incomplete);
+    expect(person.dayOn(next)!.slices.single.intervalId, 'n');
+    expect(person.days, hasLength(7));
+  });
+
+  test('page bounds stop at the last person', () {
+    const lastPage = GroupAttendance(people: [], total: 120, offset: 100);
+    expect(lastPage.hasNext, isFalse);
+    expect(lastPage.hasPrevious, isTrue);
+    expect(lastPage.pageCount, 3);
+    const exact = GroupAttendance(people: [], total: 100, offset: 50);
+    expect(exact.hasNext, isFalse);
+    expect(exact.pageCount, 2);
+    const none = GroupAttendance(people: [], total: 0);
+    expect(none.pageCount, 1);
+    expect(none.hasNext, isFalse);
+    expect(none.hasPrevious, isFalse);
+  });
+
+  test('a changed page or search is a different backend query', () {
+    final range = AttendanceRange.week(Jalali(1405, 8, 10));
+    expect(GroupAttendanceQuery(range: range, page: 1), isNot(GroupAttendanceQuery(range: range)));
+    expect(GroupAttendanceQuery(range: range, search: 'x'), isNot(GroupAttendanceQuery(range: range)));
+    expect(GroupAttendanceQuery(range: range, teamId: 't'), isNot(GroupAttendanceQuery(range: range)));
+    expect(GroupAttendanceQuery(range: range, page: 1), GroupAttendanceQuery(range: range, page: 1));
+  });
+
+  testWidgets('the pager reports the total and moves one page', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    int? moved;
+    await tester.pumpWidget(_groupHarness(total: 120, offset: 50, onPage: (page) => moved = page));
+    expect(find.text('۵۱ تا ۵۲ از ۱۲۰ نفر'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('pager-next')));
+    expect(moved, 2);
+    await tester.tap(find.byKey(const Key('pager-previous')));
+    expect(moved, 0);
+  });
+
+  testWidgets('no authorized people shows the empty state, not a pager', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(_groupHarness(people: false));
+    expect(find.byKey(const Key('attendance-group-empty')), findsOneWidget);
+    expect(find.byKey(const Key('attendance-pager')), findsNothing);
+  });
+
+  for (final width in [390.0, 768.0, 1024.0, 1440.0]) {
+    for (final brightness in Brightness.values) {
+      testWidgets('group and individual fit ${width.toInt()}px in ${brightness.name}', (tester) async {
+        await tester.binding.setSurfaceSize(Size(width, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await tester.pumpWidget(_groupHarness(brightness: brightness));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(_harness(days: _sample(approved: 7200), brightness: brightness));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+}
 const _stubTotals = DurationTotals(recorded: 1234, pending: 660, approved: 3660, revision: 0, rejected: 0);
 
 List<DayAttendance> _sample({int approved = 0}) {
@@ -327,7 +423,14 @@ Widget _harness({required List<DayAttendance> days, Brightness brightness = Brig
   );
 }
 
-Widget _groupHarness({ValueChanged<String>? onPerson}) {
+Widget _groupHarness({
+  ValueChanged<PersonAttendance>? onPerson,
+  ValueChanged<int>? onPage,
+  int total = 2,
+  int offset = 0,
+  bool people = true,
+  Brightness brightness = Brightness.light,
+}) {
   final range = AttendanceRange.week(Jalali(1405, 8, 10));
   final date = TehranTime.jalaliDayIso(1405, 8, 10);
   final start = TehranTime.toUtcFromJalali(1405, 8, 10, 9, 0);
@@ -343,15 +446,16 @@ Widget _groupHarness({ValueChanged<String>? onPerson}) {
   return ProviderScope(
     overrides: [attendanceDayTotalsProvider.overrideWith((ref, key) async => _stubTotals)],
     child: MaterialApp(
-      theme: buildAppTheme(Brightness.light),
+      theme: buildAppTheme(brightness),
       home: Scaffold(
-        body: SingleChildScrollView(
-          child: AttendanceGroupView(
-            range: range,
-            today: Jalali(1405, 8, 10),
-            group: GroupAttendance(people: [person('1', 'آرش تست'), person('2', 'بهار تست')]),
-            onPerson: onPerson ?? (_) {},
-          ),
+        body: AttendanceGroupView(
+          range: range,
+          today: Jalali(1405, 8, 10),
+          group: people
+              ? GroupAttendance(people: [person('1', 'آرش تست'), person('2', 'بهار تست')], total: total, offset: offset)
+              : const GroupAttendance(people: [], total: 0),
+          onPage: onPage,
+          onPerson: onPerson ?? (_) {},
         ),
       ),
     ),

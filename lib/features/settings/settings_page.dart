@@ -50,7 +50,19 @@ class SettingsPage extends ConsumerWidget {
             await AuthRepository(client).signOut();
           },
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: TextButton(
+            onPressed: () => showLicensePage(
+              context: context,
+              applicationName: Fa.appName,
+              applicationLegalese: Fa.iconNotice,
+            ),
+            child: const Text(Fa.licenses),
+          ),
+        ),
+        const SizedBox(height: 8),
         Text(Fa.signature, style: TextStyle(color: paletteOf(context).muted)),
       ],
     );

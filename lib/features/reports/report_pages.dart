@@ -12,6 +12,7 @@ import '../../core/offline/offline_policy.dart';
 import '../../core/design_system/glass_card.dart';
 import '../../core/design_system/state_views.dart';
 import '../../core/localization/fa.dart';
+import '../work/workflow_presentation.dart';
 import '../../core/theme/app_theme.dart';
 import '../attendance/attendance_review.dart';
 import '../attendance/jalali_fields.dart';
@@ -184,8 +185,12 @@ class _WorkAnalyticsPageState extends ConsumerState<WorkAnalyticsPage> {
                   ),
                   const SizedBox(height: 12),
                   Text(Fa.byStatus, style: Theme.of(context).textTheme.titleMedium),
-                  for (final row in asMaps(data['by_status']))
-                    Text('${row['name']}: ${persianDigits(asInt(row['total']))}'),
+                  // The four final statuses, summed over the stored ones.
+                  for (final group in taskGroups)
+                    if (asMaps(data['by_status']).any((row) => groupOfCategory(row['category']?.toString() ?? '') == group))
+                      Text(
+                        '${groupLabel(group)}: ${persianDigits(asMaps(data['by_status']).where((row) => groupOfCategory(row['category']?.toString() ?? '') == group).fold<int>(0, (sum, row) => sum + asInt(row['total'])))}',
+                      ),
                   const SizedBox(height: 12),
                   Text(Fa.byPriority, style: Theme.of(context).textTheme.titleMedium),
                   for (final row in asMaps(data['by_priority']))

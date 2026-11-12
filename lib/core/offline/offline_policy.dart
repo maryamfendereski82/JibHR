@@ -5,6 +5,12 @@ const readRpcNames = {
   'preview_open_attendance',
   'attendance_totals',
   'dashboard_summary',
+  // The four read-only sections dashboard_summary is now built from
+  // (migration 20261108120000). Listed so Home keeps its offline read cache.
+  'dashboard_personal',
+  'dashboard_queues',
+  'dashboard_team',
+  'dashboard_projects',
   'dashboard_people',
   'attendance_analytics',
   'work_analytics',

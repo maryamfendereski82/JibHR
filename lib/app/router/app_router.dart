@@ -15,6 +15,7 @@ import '../../features/work/task_board.dart';
 import '../../features/work/task_detail.dart';
 import '../../features/notifications/notification_pages.dart';
 import '../../features/reports/report_pages.dart';
+import '../../features/reports/reports_center_page.dart';
 import '../../features/leave/absence_pages.dart';
 import '../../features/leave/leave_pages.dart';
 import '../../features/session/workspace_session.dart';
@@ -53,29 +54,38 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
       GoRoute(path: '/forgot-password', builder: (context, state) => const ForgotPasswordPage()),
       GoRoute(path: '/change-password', builder: (context, state) => const ChangePasswordPage()),
-      ShellRoute(
-        builder: (context, state, child) => AppShell(child: child),
-        routes: [
-          GoRoute(path: '/', builder: (context, state) => const DashboardPage()),
-          GoRoute(
-            path: '/attendance',
-            builder: (context, state) => const AttendancePage(),
-            routes: [
-              GoRoute(path: 'approvals', builder: (context, state) => const ApprovalQueuePage()),
-              GoRoute(path: 'corrections', builder: (context, state) => const CorrectionQueuePage()),
-              GoRoute(path: 'mine', builder: (context, state) => const MyCorrectionsPage()),
-            ],
-          ),
-          GoRoute(
-            path: '/leave',
-            builder: (context, state) => const MyLeavePage(),
-            routes: [
-              GoRoute(path: 'queue', builder: (context, state) => const LeaveQueuePage()),
-              GoRoute(path: 'calendar', builder: (context, state) => const LeaveCalendarPage()),
-              GoRoute(path: 'absence', builder: (context, state) => const AbsenceAdminPage()),
-              GoRoute(path: 'my-absence', builder: (context, state) => const MyAbsencePage()),
-            ],
-          ),
+      // One navigator per section, so each keeps its own page stack and state
+      // while another section is open. Branch order: navigation.dart branchOrder.
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, shell) => AppShell(shell: shell),
+        branches: [
+          StatefulShellBranch(routes: [
+            GoRoute(path: '/', builder: (context, state) => const DashboardPage()),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/attendance',
+              builder: (context, state) => const AttendancePage(),
+              routes: [
+                GoRoute(path: 'approvals', builder: (context, state) => const ApprovalQueuePage()),
+                GoRoute(path: 'corrections', builder: (context, state) => const CorrectionQueuePage()),
+                GoRoute(path: 'mine', builder: (context, state) => const MyCorrectionsPage()),
+              ],
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/leave',
+              builder: (context, state) => const MyLeavePage(),
+              routes: [
+                GoRoute(path: 'queue', builder: (context, state) => const LeaveQueuePage()),
+                GoRoute(path: 'calendar', builder: (context, state) => const LeaveCalendarPage()),
+                GoRoute(path: 'absence', builder: (context, state) => const AbsenceAdminPage()),
+                GoRoute(path: 'my-absence', builder: (context, state) => const MyAbsencePage()),
+              ],
+            ),
+          ]),
+          StatefulShellBranch(routes: [
           GoRoute(
             path: '/work',
             builder: (context, state) => const ProjectListPage(),
@@ -120,15 +130,28 @@ final routerProvider = Provider<GoRouter>((ref) {
               ),
             ],
           ),
-          GoRoute(
-            path: '/reports/attendance',
-            builder: (context, state) => AttendanceAnalyticsPage(profileId: state.uri.queryParameters['profile']),
-          ),
-          GoRoute(path: '/reports/work', builder: (context, state) => const WorkAnalyticsPage()),
-          GoRoute(path: '/reports/leave', builder: (context, state) => const LeaveAnalyticsPage()),
-          GoRoute(path: '/reports/export', builder: (context, state) => const ExportPage()),
-          GoRoute(path: '/notifications', builder: (context, state) => const InboxPage()),
-          GoRoute(path: '/settings', builder: (context, state) => const SettingsPage()),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/reports',
+              builder: (context, state) => const ReportsCenterPage(),
+              routes: [
+                GoRoute(
+                  path: 'attendance',
+                  builder: (context, state) => AttendanceAnalyticsPage(profileId: state.uri.queryParameters['profile']),
+                ),
+                GoRoute(path: 'work', builder: (context, state) => const WorkAnalyticsPage()),
+                GoRoute(path: 'leave', builder: (context, state) => const LeaveAnalyticsPage()),
+                GoRoute(path: 'export', builder: (context, state) => const ExportPage()),
+              ],
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(path: '/notifications', builder: (context, state) => const InboxPage()),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(path: '/settings', builder: (context, state) => const SettingsPage()),
+          ]),
         ],
       ),
     ],

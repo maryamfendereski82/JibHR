@@ -32,6 +32,15 @@ void main() {
     expect(offlineAccessOpen(validatedAt: null, now: now, online: false), isFalse);
   });
 
+  test('the four dashboard sections are cached reads, nothing wider', () {
+    for (final name in ['dashboard_personal', 'dashboard_queues', 'dashboard_team', 'dashboard_projects', 'dashboard_summary']) {
+      expect(offlineBlocksRequest('POST', '/rest/v1/rpc/$name'), isFalse, reason: name);
+    }
+    // A name merely starting like a section is still refused offline.
+    expect(offlineBlocksRequest('POST', '/rest/v1/rpc/dashboard_team_update'), isTrue);
+    expect(offlineBlocksRequest('POST', '/rest/v1/rpc/clock_out'), isTrue);
+  });
+
   test('cached text is not stored in the clear', () async {
     final key = await newCacheKey();
     final stored = await encodeCache({'name': 'سارا'}, key);

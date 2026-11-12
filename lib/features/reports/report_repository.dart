@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/errors/app_failure.dart';
 import '../../core/networking/supabase_provider.dart';
 import '../attendance/attendance_review.dart';
+import '../session/workspace_session.dart';
 import 'report_rules.dart';
 
 Object reportFailure(Object error) {
@@ -42,6 +43,36 @@ final dashboardSummaryProvider = FutureProvider<Map<String, dynamic>>((ref) asyn
   final map = await _rpcMap(client, 'dashboard_summary');
   ref.read(dashboardCacheProvider.notifier).keep(map);
   return map;
+});
+
+// The four dashboard sections, one RPC each, independent in data and in
+// failure. They follow the session, so a different person never sees the
+// previous person's figures. dashboard_summary above stays for older callers.
+
+Future<SupabaseClient> _sectionClient(Ref ref) async {
+  final client = ref.watch(supabaseClientProvider);
+  if (client == null) throw const AppFailure('network');
+  final session = await ref.watch(workspaceSessionProvider.future);
+  if (session == null) throw const AppFailure('network');
+  return client;
+}
+
+final dashboardPersonalProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  return _rpcMap(await _sectionClient(ref), 'dashboard_personal');
+});
+
+final dashboardQueuesProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  return _rpcMap(await _sectionClient(ref), 'dashboard_queues');
+});
+
+/// Null when the person has no team view.
+final dashboardTeamProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  return _rpcMapOrNull(await _sectionClient(ref), 'dashboard_team');
+});
+
+/// Null when the person sees no project.
+final dashboardProjectsProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  return _rpcMapOrNull(await _sectionClient(ref), 'dashboard_projects');
 });
 
 final reportFiltersProvider = FutureProvider<Map<String, dynamic>>((ref) async {
@@ -177,6 +208,19 @@ Future<List<Map<String, dynamic>>> collectExport(
   } while (offset < expected);
   if (rows.length != expected) throw const AppFailure('export_changed');
   return rows;
+}
+
+/// Like [_rpcMap], but a SQL null result is a valid "not shown" answer.
+Future<Map<String, dynamic>?> _rpcMapOrNull(SupabaseClient client, String name) async {
+  try {
+    final raw = await client.rpc(name);
+    if (raw == null) return null;
+    final map = asMap(raw);
+    if (map == null) throw const AppFailure('network');
+    return map;
+  } catch (error) {
+    throw reportFailure(error);
+  }
 }
 
 Future<Map<String, dynamic>> _rpcMap(SupabaseClient client, String name, [Map<String, dynamic>? params]) async {

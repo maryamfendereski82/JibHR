@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -32,6 +34,18 @@ final attendanceBoardProvider = FutureProvider<AttendanceBoard?>((ref) async {
   return AttendanceRepository(client).load(session.profileId);
 });
 
+/// Clock in or out through the existing RPCs and refresh what depends on it.
+/// Shared by the attendance page and Home so both run the same logic.
+/// Throws on failure; the caller decides how to tell the person.
+Future<void> punchAttendance(WidgetRef ref, {required bool isOpen}) async {
+  final client = ref.read(supabaseClientProvider);
+  if (client == null) throw StateError('no client');
+  await AttendanceRepository(client).punch(isOpen: isOpen);
+  ref.invalidate(attendanceBoardProvider);
+  ref.invalidate(dashboardAttendanceProvider);
+  ref.invalidate(attendanceDayTotalsProvider);
+}
+
 class AttendancePage extends ConsumerStatefulWidget {
   const AttendancePage({super.key});
 
@@ -46,20 +60,36 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   int? selectedDay;
   bool group = false;
   String? teamId;
-  String? employeeId;
+  ({String id, String name})? person;
+  String search = '';
+  int page = 0;
+  Timer? _searchDebounce;
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  void _onSearch(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted || value.trim() == search) return;
+      setState(() {
+        search = value.trim();
+        page = 0;
+      });
+    });
+  }
 
   Future<void> _punch(bool isOpen, AttendanceCalendarQuery? query) async {
-    final client = ref.read(supabaseClientProvider);
-    if (client == null) return;
+    if (ref.read(supabaseClientProvider) == null) return;
     try {
-      await AttendanceRepository(client).punch(isOpen: isOpen);
+      await punchAttendance(ref, isOpen: isOpen);
     } catch (_) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(Fa.network)));
       return;
     }
-    ref.invalidate(attendanceBoardProvider);
-    ref.invalidate(dashboardAttendanceProvider);
-    ref.invalidate(attendanceDayTotalsProvider);
     if (query != null) ref.invalidate(attendanceCalendarProvider(query));
   }
 
@@ -68,8 +98,8 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     final session = ref.watch(workspaceSessionProvider).asData?.value;
     final canGroup = session?.can('attendance.view.team') == true || session?.can('attendance.view.all') == true;
     final inGroup = group && canGroup;
-    final matrix = inGroup && employeeId == null;
-    final profileId = inGroup ? (employeeId ?? '') : (session?.profileId ?? '');
+    final matrix = inGroup && person == null;
+    final profileId = inGroup ? (person?.id ?? '') : (session?.profileId ?? '');
 
     final monthQuery = session == null || matrix
         ? null
@@ -79,9 +109,8 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
             profileId: profileId,
             includePreview: profileId == session.profileId,
           );
-    final groupQuery = GroupAttendanceQuery(range: range, teamId: teamId);
-    final groupData = inGroup ? ref.watch(attendanceGroupProvider(groupQuery)) : null;
-    final palette = paletteOf(context);
+    final groupQuery = GroupAttendanceQuery(range: range, teamId: teamId, search: search, page: page);
+        final palette = paletteOf(context);
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -105,7 +134,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
             onGroup: (value) => setState(() {
               group = value;
               selectedDay = null;
-              if (!value) employeeId = null;
+              if (!value) person = null;
             }),
           ),
           if (!inGroup) _ClockCard(onPunch: (isOpen) => _punch(isOpen, monthQuery)),
@@ -114,23 +143,24 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: _GroupFilters(
                 teamId: teamId,
-                employeeId: employeeId,
-                people: groupData?.asData?.value.people ?? const [],
+                person: person?.name,
+                initialSearch: search,
                 onTeam: (value) => setState(() {
                   teamId = value;
-                  employeeId = null;
+                  person = null;
                   selectedDay = null;
+                  page = 0;
                 }),
-                onEmployee: (value) => setState(() {
-                  employeeId = value;
-                  selectedDay = null;
-                }),
+                onSearch: _onSearch,
                 trailing: matrix
-                    ? AttendanceRangeBar(range: range, today: today, onChanged: (value) => setState(() => range = value))
+                    ? AttendanceRangeBar(range: range, today: today, onChanged: (value) => setState(() {
+                        range = value;
+                        page = 0;
+                      }))
                     : TextButton.icon(
                         key: const Key('attendance-back-to-group'),
                         onPressed: () => setState(() {
-                          employeeId = null;
+                          person = null;
                           selectedDay = null;
                         }),
                         icon: const Icon(Icons.groups_outlined),
@@ -140,23 +170,14 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
             ),
           Expanded(
             child: matrix
-                ? groupData!.when(
-                    loading: () => const LoadingView(),
-                    error: (error, _) => ErrorView(message: Fa.network, onRetry: () => ref.invalidate(attendanceGroupProvider(groupQuery))),
-                    data: (value) => ListView(
-                      padding: const EdgeInsets.all(16),
-                      children: [
-                        AttendanceGroupView(
-                          range: range,
-                          today: today,
-                          group: value,
-                          onPerson: (id) => setState(() {
-                            employeeId = id;
-                            selectedDay = null;
-                          }),
-                        ),
-                      ],
-                    ),
+                ? _GroupBody(
+                    query: groupQuery,
+                    today: today,
+                    onPerson: (value) => setState(() {
+                      person = (id: value.id, name: value.name);
+                      selectedDay = null;
+                    }),
+                    onPage: (value) => setState(() => page = value),
                   )
                 : monthQuery == null || profileId.isEmpty
                     ? const LoadingView()
@@ -295,6 +316,28 @@ class _ClockCard extends ConsumerWidget {
   }
 }
 
+/// A failed read shows the error at once. The provider keeps retrying behind it,
+/// and without this check the retries would read as an endless spinner.
+class _GroupBody extends ConsumerWidget {
+  const _GroupBody({required this.query, required this.today, required this.onPerson, required this.onPage});
+
+  final GroupAttendanceQuery query;
+  final Jalali today;
+  final ValueChanged<PersonAttendance> onPerson;
+  final ValueChanged<int> onPage;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final group = ref.watch(attendanceGroupProvider(query));
+    if (group.hasError && !group.hasValue) {
+      return ErrorView(message: Fa.network, onRetry: () => ref.invalidate(attendanceGroupProvider(query)));
+    }
+    final value = group.asData?.value;
+    if (value == null) return const LoadingView();
+    return AttendanceGroupView(range: query.range, today: today, group: value, onPerson: onPerson, onPage: onPage);
+  }
+}
+
 /// The grid stays up with its month while the data loads, so the arrows never jump.
 class _MonthBody extends ConsumerWidget {
   const _MonthBody({
@@ -337,28 +380,27 @@ class _MonthBody extends ConsumerWidget {
 class _GroupFilters extends ConsumerWidget {
   const _GroupFilters({
     required this.teamId,
-    required this.employeeId,
-    required this.people,
+    required this.person,
+    required this.initialSearch,
     required this.onTeam,
-    required this.onEmployee,
+    required this.onSearch,
     required this.trailing,
   });
 
   final String? teamId;
-  final String? employeeId;
-  final List<PersonAttendance> people;
+  final String? person;
+  final String initialSearch;
   final ValueChanged<String?> onTeam;
-  final ValueChanged<String?> onEmployee;
+  final ValueChanged<String> onSearch;
   final Widget trailing;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final teams = ref.watch(attendanceTeamsProvider).asData?.value ?? const <TeamOption>[];
-    final shown = filterPeople(people, teamId: teamId);
     final teamValue = teams.any((team) => team.id == teamId) ? teamId : null;
-    final employeeValue = shown.any((person) => person.id == employeeId) ? employeeId : null;
     final compact = MediaQuery.sizeOf(context).width < compactBelow;
     final fieldWidth = compact ? (MediaQuery.sizeOf(context).width - 40) / 2 : 200.0;
+    final name = person;
     return Wrap(
       key: const Key('attendance-group-filters'),
       spacing: 8,
@@ -379,21 +421,22 @@ class _GroupFilters extends ConsumerWidget {
             onChanged: onTeam,
           ),
         ),
-        SizedBox(
-          width: fieldWidth,
-          child: DropdownButtonFormField<String?>(
-            key: ValueKey('employee-${people.length}-$employeeValue'),
-            isExpanded: true,
-            initialValue: employeeValue,
-            decoration: const InputDecoration(labelText: Fa.employee, isDense: true),
-            items: [
-              const DropdownMenuItem(value: null, child: Text(Fa.allPeople)),
-              for (final person in shown)
-                DropdownMenuItem(value: person.id, child: Text(person.name.isEmpty ? Fa.employee : person.name)),
-            ],
-            onChanged: onEmployee,
-          ),
-        ),
+        if (name == null)
+          SizedBox(
+            width: fieldWidth,
+            child: TextFormField(
+              key: const Key('attendance-search'),
+              initialValue: initialSearch,
+              onChanged: onSearch,
+              decoration: const InputDecoration(
+                labelText: Fa.searchEmployee,
+                isDense: true,
+                suffixIcon: Icon(Icons.search, size: 20),
+              ),
+            ),
+          )
+        else
+          Text(name.isEmpty ? Fa.employee : name, key: const Key('attendance-person-name'), style: Theme.of(context).textTheme.titleSmall),
         trailing,
       ],
     );

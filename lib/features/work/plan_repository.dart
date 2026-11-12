@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../attendance/attendance_review.dart';
+import 'work_repository.dart' show statusFilterIds;
 import 'work_rules.dart';
 
 const _planTaskColumns = '''
@@ -11,6 +12,10 @@ tasks!inner(
   workflow_statuses(name, category)
 )
 ''';
+
+/// `milestone_tasks` is only (milestone_id, task_id): no membership history
+/// columns, so it cannot share [_planTaskColumns].
+final _milestoneTaskColumns = _planTaskColumns.replaceFirst('task_id, removed_at, carried_from_sprint_id, added_at,', 'task_id,');
 
 class PlanCounts {
   const PlanCounts({required this.total, required this.complete, required this.blocked});
@@ -33,15 +38,7 @@ class PlanCounts {
 }
 
 class SprintRow {
-  const SprintRow({
-    required this.id,
-    required this.name,
-    required this.description,
-    required this.startDate,
-    required this.endDate,
-    required this.status,
-    this.summary,
-  });
+  const SprintRow({required this.id, required this.name, required this.description, required this.startDate, required this.endDate, required this.status, this.summary});
 
   final String id;
   final String name;
@@ -53,13 +50,7 @@ class SprintRow {
 }
 
 class MilestoneRow {
-  const MilestoneRow({
-    required this.id,
-    required this.title,
-    required this.description,
-    required this.targetDate,
-    required this.status,
-  });
+  const MilestoneRow({required this.id, required this.title, required this.description, required this.targetDate, required this.status});
 
   final String id;
   final String title;
@@ -95,11 +86,7 @@ class PlanTaskRow {
   final String approvalState;
   final bool removed;
 
-  bool get complete => taskCountsComplete(
-        category: statusCategory,
-        approvalRequired: approvalRequired,
-        approvalState: approvalState,
-      );
+  bool get complete => taskCountsComplete(category: statusCategory, approvalRequired: approvalRequired, approvalState: approvalState);
 }
 
 class PlanBreakdown {
@@ -115,13 +102,7 @@ class PlanRepository {
 
   final SupabaseClient _client;
 
-  Future<({List<SprintRow> rows, int total})> sprints({
-    required String projectId,
-    String? status,
-    List<String>? statuses,
-    String search = '',
-    int page = 0,
-  }) async {
+  Future<({List<SprintRow> rows, int total})> sprints({required String projectId, String? status, List<String>? statuses, String search = '', int page = 0}) async {
     final bounds = pageRange(page, taskPageSize);
     var query = _client.from('sprints').select('id, name, description, start_date, end_date, status, summary').eq('project_id', projectId);
     if (statuses != null && statuses.isNotEmpty) {
@@ -148,58 +129,29 @@ class PlanRepository {
 
   Future<List<PlanBreakdown>> sprintBreakdown(String sprintId) async {
     final rows = asMaps(await _client.rpc('sprint_breakdown', params: {'p_sprint': sprintId}));
-    return [
-      for (final row in rows)
-        PlanBreakdown(kind: row['kind']?.toString() ?? '', bucket: row['bucket']?.toString() ?? '', total: _int(row['total'])),
-    ];
+    return [for (final row in rows) PlanBreakdown(kind: row['kind']?.toString() ?? '', bucket: row['bucket']?.toString() ?? '', total: _int(row['total']))];
   }
 
-  Future<({List<PlanTaskRow> tasks, int total})> sprintTasks({
-    required String sprintId,
-    required bool history,
-    String? statusId,
-    String? priority,
-    String? assigneeId,
-    int page = 0,
-  }) async {
+  Future<({List<PlanTaskRow> tasks, int total})> sprintTasks({required String sprintId, required bool history, String? statusId, String? priority, String? assigneeId, int page = 0}) async {
     final bounds = pageRange(page, taskPageSize);
     var query = _client.from('sprint_tasks').select(_planTaskColumns).eq('sprint_id', sprintId);
     query = history ? query.not('removed_at', 'is', null) : query.isFilter('removed_at', null);
     query = query.isFilter('tasks.archived_at', null);
-    if (statusId != null) query = query.eq('tasks.status_id', statusId);
+    final statusIds = statusFilterIds(statusId);
+    if (statusIds != null) query = statusIds.length == 1 ? query.eq('tasks.status_id', statusIds.single) : query.inFilter('tasks.status_id', statusIds);
     if (priority != null) query = query.eq('tasks.priority', priority);
     if (assigneeId != null) query = query.eq('tasks.primary_assignee_id', assigneeId);
     final response = await query.order('added_at', ascending: false).range(bounds.start, bounds.end).count(CountOption.exact);
     return (tasks: [for (final row in asMaps(response.data)) _task(row)], total: response.count);
   }
 
-  Future<String> createSprint({
-    required String projectId,
-    required String name,
-    required String description,
-    required String start,
-    required String end,
-    List<String> tasks = const [],
-  }) async {
-    final id = await _client.rpc('create_sprint', params: {
-      'p_project': projectId,
-      'p_name': name,
-      'p_description': description,
-      'p_start': start,
-      'p_end': end,
-      'p_tasks': tasks,
-    });
+  Future<String> createSprint({required String projectId, required String name, required String description, required String start, required String end, List<String> tasks = const []}) async {
+    final id = await _client.rpc('create_sprint', params: {'p_project': projectId, 'p_name': name, 'p_description': description, 'p_start': start, 'p_end': end, 'p_tasks': tasks});
     return id.toString();
   }
 
   Future<void> updateSprint(SprintRow sprint) {
-    return _client.rpc('update_sprint', params: {
-      'p_sprint': sprint.id,
-      'p_name': sprint.name,
-      'p_description': sprint.description,
-      'p_start': sprint.startDate,
-      'p_end': sprint.endDate,
-    });
+    return _client.rpc('update_sprint', params: {'p_sprint': sprint.id, 'p_name': sprint.name, 'p_description': sprint.description, 'p_start': sprint.startDate, 'p_end': sprint.endDate});
   }
 
   Future<void> setSprintStatus(String sprintId, String status) {
@@ -218,11 +170,7 @@ class PlanRepository {
     return _client.rpc('transfer_sprint_remainder', params: {'p_from': fromSprintId, 'p_to': toSprintId});
   }
 
-  Future<({List<MilestoneRow> rows, int total})> milestones({
-    required String projectId,
-    String? status,
-    int page = 0,
-  }) async {
+  Future<({List<MilestoneRow> rows, int total})> milestones({required String projectId, String? status, int page = 0}) async {
     final bounds = pageRange(page, taskPageSize);
     var query = _client.from('milestones').select('id, title, description, target_date, status').eq('project_id', projectId);
     if (status != null) query = query.eq('status', status);
@@ -245,7 +193,7 @@ class PlanRepository {
     final bounds = pageRange(page, taskPageSize);
     final response = await _client
         .from('milestone_tasks')
-        .select(_planTaskColumns)
+        .select(_milestoneTaskColumns)
         .eq('milestone_id', milestoneId)
         .isFilter('tasks.archived_at', null)
         .order('task_id')
@@ -254,38 +202,17 @@ class PlanRepository {
     return (tasks: [for (final row in asMaps(response.data)) _task(row)], total: response.count);
   }
 
-  Future<String> createMilestone({
-    required String projectId,
-    required String title,
-    required String description,
-    required String target,
-    List<String> tasks = const [],
-  }) async {
-    final id = await _client.rpc('create_milestone', params: {
-      'p_project': projectId,
-      'p_title': title,
-      'p_description': description,
-      'p_target': target,
-      'p_tasks': tasks,
-    });
+  Future<String> createMilestone({required String projectId, required String title, required String description, required String target, List<String> tasks = const []}) async {
+    final id = await _client.rpc('create_milestone', params: {'p_project': projectId, 'p_title': title, 'p_description': description, 'p_target': target, 'p_tasks': tasks});
     return id.toString();
   }
 
   Future<void> updateMilestone(MilestoneRow milestone) {
-    return _client.rpc('update_milestone', params: {
-      'p_milestone': milestone.id,
-      'p_title': milestone.title,
-      'p_description': milestone.description,
-      'p_target': milestone.targetDate,
-    });
+    return _client.rpc('update_milestone', params: {'p_milestone': milestone.id, 'p_title': milestone.title, 'p_description': milestone.description, 'p_target': milestone.targetDate});
   }
 
   Future<void> setMilestoneStatus(String milestoneId, String status, {String reason = ''}) {
-    return _client.rpc('set_milestone_status', params: {
-      'p_milestone': milestoneId,
-      'p_status': status,
-      'p_reason': reason,
-    });
+    return _client.rpc('set_milestone_status', params: {'p_milestone': milestoneId, 'p_status': status, 'p_reason': reason});
   }
 
   Future<void> linkTask(String milestoneId, String taskId) {

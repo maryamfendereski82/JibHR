@@ -1,16 +1,13 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 
-import '../theme/app_theme.dart';
+import '../theme/app_tokens.dart';
+import 'surfaces.dart';
 
+/// The original card API, now drawn by [AppSurface].
+///
+/// Without [blur] it is an L1 solid card. With [blur] it is an L2 glass card.
 class GlassCard extends StatelessWidget {
-  const GlassCard({
-    super.key,
-    required this.child,
-    this.padding = const EdgeInsets.all(20),
-    this.blur = false,
-  });
+  const GlassCard({super.key, required this.child, this.padding = const EdgeInsets.all(AppSpace.xl), this.blur = false});
 
   final Widget child;
   final EdgeInsetsGeometry padding;
@@ -18,29 +15,6 @@ class GlassCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = paletteOf(context);
-    final decoration = BoxDecoration(
-      color: palette.card,
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: palette.stroke),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.06),
-          blurRadius: 24,
-          offset: const Offset(0, 10),
-        ),
-      ],
-    );
-    final body = Padding(padding: padding, child: child);
-    if (!blur) {
-      return DecoratedBox(decoration: decoration, child: body);
-    }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-        child: DecoratedBox(decoration: decoration, child: body),
-      ),
-    );
+    return AppSurface(level: blur ? SurfaceLevel.glass : SurfaceLevel.solid, padding: padding, radius: AppRadius.panel, child: child);
   }
 }

@@ -21,10 +21,7 @@ class BrandMark extends StatelessWidget {
           border: Border.all(color: palette.stroke),
         ),
         alignment: Alignment.center,
-        child: CustomPaint(
-          size: Size.square(size * 0.62),
-          painter: _MarkPainter(),
-        ),
+        child: CustomPaint(size: Size.square(size * 0.62), painter: _MarkPainter()),
       ),
     );
   }
@@ -42,22 +39,11 @@ class _MarkPainter extends CustomPainter {
     final path = Path()
       ..moveTo(size.width * 0.18, size.height * 0.2)
       ..lineTo(size.width * 0.72, size.height * 0.2)
-      ..cubicTo(
-        size.width * 0.95,
-        size.height * 0.2,
-        size.width * 0.95,
-        size.height * 0.55,
-        size.width * 0.62,
-        size.height * 0.55,
-      )
+      ..cubicTo(size.width * 0.95, size.height * 0.2, size.width * 0.95, size.height * 0.55, size.width * 0.62, size.height * 0.55)
       ..lineTo(size.width * 0.38, size.height * 0.55)
       ..lineTo(size.width * 0.38, size.height * 0.84);
     canvas.drawPath(path, stroke);
-    canvas.drawCircle(
-      Offset(size.width * 0.78, size.height * 0.78),
-      size.width * 0.08,
-      Paint()..color = const Color(0xFFE7C56A),
-    );
+    canvas.drawCircle(Offset(size.width * 0.78, size.height * 0.78), size.width * 0.08, Paint()..color = const Color(0xFFE7C56A));
   }
 
   @override

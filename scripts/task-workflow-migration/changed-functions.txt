@@ -1,0 +1,55 @@
+CHANGED
+public.create_task
+public.update_task
+public.transition_task
+public.add_task_collaborator
+public.remove_project_member
+public.remove_task_collaborator
+public.set_task_labels
+public.add_checklist_item
+public.toggle_checklist_item
+public.rename_checklist_item
+public.delete_checklist_item
+public.move_checklist_item
+app.task_visible_directly
+public.save_workflow_status
+app.seed_workflow
+public.project_sprint_counts
+public.project_milestone_counts
+public.set_sprint_status
+public.transfer_sprint_remainder
+public.set_milestone_status
+app.dashboard_summary_v1
+public.dashboard_projects
+public.dashboard_team
+public.dashboard_people
+public.dashboard_personal
+public.work_analytics
+NEW_PUBLIC
+public.project_member_directory(uuid)
+public.project_member_open_tasks(uuid, uuid, integer)
+public.submit_task_for_review(uuid)
+public.review_update_task(uuid, uuid, jsonb)
+public.decide_task(uuid, text, uuid, text, text, jsonb, text)
+public.complete_task(uuid, text)
+public.set_task_blocked(uuid, text)
+public.clear_task_blocked(uuid, text)
+NEW_INTERNAL
+app.person_label(uuid)
+app.person_json(uuid)
+app.require_active_member(uuid, uuid, text)
+app.require_active_profile(uuid, text)
+app.personal_assign_scope(uuid)
+app.task_snapshot(uuid)
+app.can_act_on_task(public.tasks)
+app.can_decide_task(public.tasks)
+app.workflow_status(uuid, text)
+app.open_round(uuid)
+app.task_is_unresolved(uuid)
+app.task_is_open(uuid)
+app.open_tasks_of_member(uuid, uuid, integer)
+app.apply_review_changes(public.tasks, uuid, jsonb)
+app.protect_review_round()
+app.reject_change()
+app.require_revision_request()
+app.check_revision_request()

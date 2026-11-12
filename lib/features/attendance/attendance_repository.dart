@@ -31,7 +31,14 @@ class AttendanceRepository {
     final now = DateTime.now().toUtc();
     final today = TehranTime.dateOnly(now);
     final month = TehranTime.jalaliMonth(now);
-    final preview = await _client.rpc('preview_open_attendance');
+    // The four reads do not depend on each other: run them together.
+    final results = await Future.wait<Object?>([
+      _client.rpc('preview_open_attendance'),
+      _totals(profileId, today, today),
+      _totals(profileId, TehranTime.weekStart(now), TehranTime.weekEnd(now)),
+      _totals(profileId, month.$1, month.$2),
+    ]);
+    final preview = results[0];
     final spans = <({DateTime start, DateTime end})>[];
     if (preview is List) {
       for (final row in preview) {
@@ -43,9 +50,9 @@ class AttendanceRepository {
     }
     return AttendanceBoard(
       isOpen: spans.isNotEmpty,
-      today: await _totals(profileId, today, today),
-      week: await _totals(profileId, TehranTime.weekStart(now), TehranTime.weekEnd(now)),
-      month: await _totals(profileId, month.$1, month.$2),
+      today: results[1]! as DurationTotals,
+      week: results[2]! as DurationTotals,
+      month: results[3]! as DurationTotals,
       provisional: spans,
     );
   }
@@ -100,71 +107,18 @@ class AttendanceRepository {
     );
   }
 
-  /// People come from memberships, but attendance is narrower than employee
-  /// visibility. Someone the backend refuses is left out instead of failing the screen.
+  /// One page in one request. The server applies the team filter, the search,
+  /// the viewer's access and the page bounds.
   Future<GroupAttendance> group(GroupAttendanceQuery query) async {
-    final days = query.range.days;
-    final from = isoOf(query.range.from);
-    final to = isoOf(query.range.to);
-    final members = await _members(query.teamId);
-    final truncated = members.length > _peopleLimit;
-    final shown = members.take(_peopleLimit).toList();
-    final rows = <({String id, DurationTotals totals, Map<String, int> approved})>[];
-    for (var start = 0; start < shown.length; start += _rpcBatch) {
-      final batch = shown.skip(start).take(_rpcBatch);
-      final results = await Future.wait(batch.map((person) async {
-        try {
-          final totals = await _totalsIso(person.id, from, to);
-          final approved = await _approvedByDay(person.id, from, to);
-          return (id: person.id, totals: totals, approved: approved);
-        } on PostgrestException catch (error) {
-          if (error.message.contains('forbidden')) return null;
-          rethrow;
-        }
-      }));
-      rows.addAll(results.nonNulls);
-    }
-    final slices = await _slices(from: from, to: to, profileIds: [for (final row in rows) row.id]);
-    final byId = {for (final row in rows) row.id: row};
-    return GroupAttendance(
-      truncated: truncated,
-      people: [
-        for (final person in shown)
-          if (byId[person.id] case final row?)
-            PersonAttendance(
-              id: person.id,
-              name: person.name,
-              teamId: person.teamId,
-              totals: row.totals,
-              days: buildDays(
-                days,
-                slices.where((slice) => slice.profileId == person.id),
-                approved: row.approved,
-              ),
-            ),
-      ],
-    );
-  }
-
-  static const _peopleLimit = 80;
-  static const _rpcBatch = 8;
-
-  Future<List<({String id, String name, String teamId})>> _members(String? teamId) async {
-    var request = _client
-        .from('team_memberships')
-        .select('profile_id, team_id, profiles!team_memberships_profile_id_fkey(first_name, last_name)')
-        .eq('is_primary', true)
-        .isFilter('left_at', null);
-    if (teamId != null) request = request.eq('team_id', teamId);
-    final rows = await request.limit(_peopleLimit + 1);
-    final people = <({String id, String name, String teamId})>[];
-    for (final row in asMaps(rows)) {
-      final id = row['profile_id']?.toString() ?? '';
-      if (id.isEmpty) continue;
-      people.add((id: id, name: personName(asMap(row['profiles'])), teamId: row['team_id']?.toString() ?? ''));
-    }
-    people.sort((a, b) => a.name.compareTo(b.name));
-    return people;
+    final raw = await _client.rpc('attendance_group_page', params: {
+      'p_from': isoOf(query.range.from),
+      'p_to': isoOf(query.range.to),
+      'p_team': query.teamId,
+      'p_search': query.search.isEmpty ? null : query.search,
+      'p_limit': groupPageSize,
+      'p_offset': query.page * groupPageSize,
+    });
+    return parseGroupPage(raw is Map ? Map<String, dynamic>.from(raw) : const {}, query.range.days);
   }
 
   Future<List<CalendarSlice>> _slices({

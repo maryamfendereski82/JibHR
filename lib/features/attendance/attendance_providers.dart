@@ -27,7 +27,7 @@ final attendanceCalendarProvider =
 final attendanceGroupProvider =
     FutureProvider.autoDispose.family<GroupAttendance, GroupAttendanceQuery>((ref, query) async {
   final client = ref.watch(supabaseClientProvider);
-  if (client == null) return const GroupAttendance(people: []);
+  if (client == null) return const GroupAttendance(people: [], total: 0);
   return AttendanceRepository(client).group(query);
 });
 

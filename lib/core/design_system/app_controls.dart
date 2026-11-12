@@ -5,13 +5,7 @@ import '../offline/offline_cache.dart';
 import '../theme/app_theme.dart';
 
 class AppButton extends ConsumerWidget {
-  const AppButton({
-    super.key,
-    required this.label,
-    required this.onPressed,
-    this.busy = false,
-    this.allowOffline = false,
-  });
+  const AppButton({super.key, required this.label, required this.onPressed, this.busy = false, this.allowOffline = false});
 
   final String label;
   final VoidCallback? onPressed;
@@ -29,33 +23,14 @@ class AppButton extends ConsumerWidget {
       width: double.infinity,
       child: FilledButton(
         onPressed: enabled ? onPressed : null,
-        style: FilledButton.styleFrom(
-          backgroundColor: palette.jade,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        ),
-        child: busy
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-              )
-            : Text(label),
+        child: busy ? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: palette.onJade)) : Text(label),
       ),
     );
   }
 }
 
 class AppTextField extends StatelessWidget {
-  const AppTextField({
-    super.key,
-    required this.label,
-    required this.controller,
-    this.obscure = false,
-    this.keyboardType,
-    this.textInputAction,
-    this.onSubmitted,
-  });
+  const AppTextField({super.key, required this.label, required this.controller, this.obscure = false, this.keyboardType, this.textInputAction, this.onSubmitted});
 
   final String label;
   final TextEditingController controller;
@@ -72,11 +47,7 @@ class AppTextField extends StatelessWidget {
       keyboardType: keyboardType,
       textInputAction: textInputAction,
       onSubmitted: onSubmitted,
-      decoration: InputDecoration(
-        labelText: label,
-        filled: true,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-      ),
+      decoration: InputDecoration(labelText: label),
     );
   }
 }
